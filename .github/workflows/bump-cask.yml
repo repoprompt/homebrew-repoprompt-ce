@@ -1,0 +1,185 @@
+name: Bump RepoPrompt CE Cask
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: Optional promoted updater release tag, for example v1.0.4. Defaults to the latest public updater release.
+        required: false
+        type: string
+  schedule:
+    - cron: "17 10 * * *"
+
+permissions:
+  contents: write
+  pull-requests: write
+
+concurrency:
+  group: bump-repoprompt-ce-cask
+  cancel-in-progress: false
+
+env:
+  CASK_PATH: Casks/repoprompt-ce.rb
+  CASK_TOKEN: repoprompt/repoprompt-ce/repoprompt-ce
+  UPDATE_REPOSITORY: repoprompt/repoprompt-ce-updates
+  HOMEBREW_NO_AUTO_UPDATE: "1"
+  HOMEBREW_NO_ENV_HINTS: "1"
+
+jobs:
+  bump:
+    name: Bump cask from promoted updater release
+    runs-on: macos-latest
+
+    steps:
+      - name: Check out tap
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          fetch-depth: 0
+
+      - name: Resolve promoted updater artifact
+        id: promoted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG_INPUT: ${{ inputs.release_tag }}
+        run: |
+          set -euo pipefail
+
+          release_tag="$RELEASE_TAG_INPUT"
+          if [[ -z "$release_tag" ]]; then
+            release_tag="$(gh api "repos/$UPDATE_REPOSITORY/releases/latest" --jq .tag_name)"
+          fi
+          export release_tag
+
+          case "$release_tag" in
+            v[0-9]*.[0-9]*.[0-9]*) ;;
+            *) echo "Invalid release tag: $release_tag" >&2; exit 1 ;;
+          esac
+
+          checksums_url="https://github.com/$UPDATE_REPOSITORY/releases/download/$release_tag/SHA256SUMS"
+          curl --fail --location --retry 5 --retry-all-errors "$checksums_url" --output SHA256SUMS
+
+          python3 <<'PYTHON' >> "$GITHUB_OUTPUT"
+          import os
+          import re
+          from pathlib import Path
+
+          release_tag = os.environ["release_tag"]
+          repository = os.environ["UPDATE_REPOSITORY"]
+          checksums = Path("SHA256SUMS").read_text(encoding="utf-8").splitlines()
+          zip_entries = []
+
+          for raw_line in checksums:
+              parts = raw_line.split()
+              if len(parts) != 2:
+                  continue
+              digest, filename = parts
+              match = re.fullmatch(r"RepoPrompt-([0-9]+(?:\.[0-9]+){2})-([0-9]+)\.zip", filename)
+              if not match:
+                  continue
+              if not re.fullmatch(r"[0-9a-fA-F]{64}", digest):
+                  raise SystemExit(f"invalid SHA-256 digest for {filename}: {digest}")
+              zip_entries.append((digest.lower(), filename, match.group(1), match.group(2)))
+
+          if len(zip_entries) != 1:
+              raise SystemExit(f"expected exactly one RepoPrompt ZIP entry in SHA256SUMS, found {len(zip_entries)}")
+
+          sha256, zip_name, marketing_version, build_number = zip_entries[0]
+          version = f"{marketing_version},{build_number}"
+          url = f"https://github.com/{repository}/releases/download/{release_tag}/{zip_name}"
+
+          print(f"release_tag={release_tag}")
+          print(f"zip_name={zip_name}")
+          print(f"version={version}")
+          print(f"sha256={sha256}")
+          print(f"url={url}")
+          PYTHON
+
+      - name: Update cask
+        id: update
+        env:
+          NEW_VERSION: ${{ steps.promoted.outputs.version }}
+          NEW_SHA256: ${{ steps.promoted.outputs.sha256 }}
+        run: |
+          set -euo pipefail
+
+          python3 <<'PYTHON'
+          import os
+          import re
+          from pathlib import Path
+
+          cask_path = Path(os.environ["CASK_PATH"])
+          new_version = os.environ["NEW_VERSION"]
+          new_sha256 = os.environ["NEW_SHA256"]
+          contents = cask_path.read_text(encoding="utf-8")
+
+          contents = re.sub(r'version "[^"]+"', f'version "{new_version}"', contents, count=1)
+          contents = re.sub(r'sha256 "[0-9a-fA-F]{64}"', f'sha256 "{new_sha256}"', contents, count=1)
+          cask_path.write_text(contents, encoding="utf-8")
+          PYTHON
+
+          if git diff --quiet -- "$CASK_PATH"; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "Cask is already current at $NEW_VERSION."
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff -- "$CASK_PATH"
+          fi
+
+      - name: Mount tap for Homebrew checks
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          tap_dir="$(brew --repository)/Library/Taps/repoprompt"
+          rm -rf "$tap_dir/homebrew-repoprompt-ce"
+          mkdir -p "$tap_dir"
+          ln -s "$GITHUB_WORKSPACE" "$tap_dir/homebrew-repoprompt-ce"
+
+      - name: Verify cask
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          set -euo pipefail
+          brew style --cask "$CASK_TOKEN"
+          brew audit --cask "$CASK_TOKEN"
+          brew fetch --cask --force "$CASK_TOKEN"
+          brew livecheck --cask "$CASK_TOKEN"
+
+      - name: Open pull request
+        if: steps.update.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEW_VERSION: ${{ steps.promoted.outputs.version }}
+          RELEASE_TAG: ${{ steps.promoted.outputs.release_tag }}
+          ZIP_URL: ${{ steps.promoted.outputs.url }}
+        run: |
+          set -euo pipefail
+
+          branch="automation/bump-repoprompt-ce-cask-${NEW_VERSION//[,.]/-}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -B "$branch"
+          git add "$CASK_PATH"
+          git commit -m "Bump RepoPrompt CE cask to $NEW_VERSION"
+          git push --force-with-lease origin "$branch"
+
+          title="Bump RepoPrompt CE cask to $NEW_VERSION"
+          body_file="$(mktemp)"
+          cat > "$body_file" <<EOF
+          Updates the RepoPrompt CE cask to the latest promoted updater artifact.
+
+          Release: \`$RELEASE_TAG\`
+          Artifact: \`$ZIP_URL\`
+
+          Validation:
+          - \`brew style --cask $CASK_TOKEN\`
+          - \`brew audit --cask $CASK_TOKEN\`
+          - \`brew fetch --cask --force $CASK_TOKEN\`
+          - \`brew livecheck --cask $CASK_TOKEN\`
+          EOF
+
+          existing_pr="$(gh pr list --state open --head "$branch" --json url --jq '.[0].url')"
+          if [[ -n "$existing_pr" ]]; then
+            gh pr edit "$existing_pr" --title "$title" --body-file "$body_file"
+            echo "Updated existing PR: $existing_pr"
+          else
+            gh pr create --title "$title" --body-file "$body_file" --base main --head "$branch"
+          fi
