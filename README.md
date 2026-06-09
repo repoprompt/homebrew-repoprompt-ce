@@ -9,12 +9,15 @@ This is the Homebrew tap repository for [RepoPrompt CE](https://github.com/repop
 
 ## Install
 
+Current Homebrew requires non-official tap casks to be trusted before it loads them. To use the short `repoprompt-ce` cask token, tap and trust this repository first:
+
 ```bash
 brew tap repoprompt/repoprompt-ce
+brew trust --tap repoprompt/repoprompt-ce
 brew install --cask repoprompt-ce
 ```
 
-You can also install in one fully qualified command:
+You can also install in one fully qualified command. Homebrew treats the fully qualified cask as the trusted install target, so this avoids trusting the whole tap:
 
 ```bash
 brew install --cask repoprompt/repoprompt-ce/repoprompt-ce
@@ -81,6 +84,20 @@ RepoPrompt CE releases are expected to be signed and notarized before promotion.
 
 Homebrew livecheck reads the public Sparkle appcast from `repoprompt/repoprompt-ce-updates`. If livecheck reports a newer version than this tap, the promoted release may not have been reflected in the cask yet.
 
+### Untrusted Tap Error
+
+If Homebrew refuses to load `repoprompt/repoprompt-ce/repoprompt-ce` from an untrusted tap, either trust only this cask:
+
+```bash
+brew trust --cask repoprompt/repoprompt-ce/repoprompt-ce
+```
+
+Or trust the whole tap before using the short `repoprompt-ce` token:
+
+```bash
+brew trust --tap repoprompt/repoprompt-ce
+```
+
 ### MCP CLI is not on PATH
 
 This tap installs the app bundle only. The app-coupled MCP helper is not exposed as a standalone Homebrew `binary` or formula in this tap.
@@ -91,6 +108,7 @@ This tap installs the app bundle only. The app-coupled MCP helper is not exposed
 - The cask URL should stay tag-specific, for example `releases/download/v<MARKETING_VERSION>/RepoPrompt-<MARKETING_VERSION>-<BUILD_NUMBER>.zip`. Do not use `latest/download` for the cask artifact URL.
 - The `sha256` should match the updater release ZIP entry in `SHA256SUMS`.
 - Signing, notarization, and Sparkle credentials belong in the upstream release pipeline, not in this tap.
+- Trust-gated Homebrew installs should be documented with either `brew trust --tap repoprompt/repoprompt-ce` before the short cask token or the fully qualified cask token `repoprompt/repoprompt-ce/repoprompt-ce`.
 - Before updating the cask, verify style, audit, and livecheck against the fully qualified token: `repoprompt/repoprompt-ce/repoprompt-ce`.
 
 ## License
