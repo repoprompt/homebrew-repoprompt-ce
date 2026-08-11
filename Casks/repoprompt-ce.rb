@@ -1,6 +1,6 @@
 cask "repoprompt-ce" do
-  version "1.2.0,34"
-  sha256 "1545e192dce42f5cbe5cc2494c06fc938d548eece83d27b304258aa88652123f"
+  version "1.3.0,35"
+  sha256 "92ed87475e000408974afe02476795dcae76ac08cf833d3aab6a51c34490e3a3"
 
   url "https://github.com/repoprompt/repoprompt-ce-updates/releases/download/v#{version.csv.first}/RepoPrompt-#{version.csv.first}-#{version.csv.second}.zip"
   name "RepoPrompt CE"
